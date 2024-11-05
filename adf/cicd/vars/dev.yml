@@ -1,0 +1,11 @@
+variables:
+  - name: subscriptionId
+    value: ''
+  - name: resourceGroup
+    value: ''
+  - name: adfName
+    value: ''
+  - name: serviceConnection
+    value: ''
+  - name: overrideParameters
+    value: ''

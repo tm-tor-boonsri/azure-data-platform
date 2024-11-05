@@ -1,0 +1,107 @@
+# to validate terraform manually in any pr
+name: manaul pull-request checker
+
+trigger: none
+
+parameters:
+  - name: environemntToRun
+    type: string
+    default: dev 
+    values: 
+      - dev
+      - test
+      - prod
+
+variables:
+- ${{ if eq(parameters.environemntToRun, 'dev') }}:
+  - group: ""
+- ${{ if eq(parameters.environemntToRun, 'test') }}:
+  - group: ""
+- ${{ if eq(parameters.environemntToRun, 'prod') }}:
+  - group: ""
+      
+stages:
+- stage: Installation
+  pool: (env)-devops-vm-pool
+  displayName: 'Install Prerequisites'
+  jobs:
+  - job: install
+    steps:
+      - task: Bash@3
+        displayName: 'Install AzureCLI'
+        inputs:
+          targetType: 'inline'
+          script: |
+            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+            
+      - task: AzureCLI@2
+        displayName: 'Install zip'
+        inputs:
+          azureSubscription: $(service_connection)
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            sudo apt-get install zip -y
+
+- stage: Terraform
+  pool: (env)-devops-vm-pool
+  displayName: 'Terraform - Build and Validate'
+  jobs:
+  - job: execute
+    steps:
+      - task: TerraformInstaller@1
+        name: setup
+        displayName: 'Setup Terraform'
+        inputs:
+          terraformVersion: 'latest'
+          checkLatestVersion: false
+
+      - task: DownloadSecureFile@1
+        name: terraformFile
+        displayName: 'Download terraform.tfvars'
+        inputs:
+          secureFile: '$(environment).terraform.tfvars'
+      
+      - task: TerraformTaskV4@4
+        name: init
+        displayName: 'Initialize Terraform'
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          commandOptions: '-upgrade'
+          workingDirectory: $(System.DefaultWorkingDirectory)/workload/$(environment)
+          backendServiceArm: $(service_connection)
+          backendAzureRmResourceGroupName: $(backend_resource_group)
+          backendAzureRmStorageAccountName: $(storage_account)
+          backendAzureRmContainerName: $(workload_storage_container)
+          backendAzureRmKey: '$(environment).terraform.tfstate'
+      
+      - task: TerraformTaskV4@4
+        name: validate
+        displayName: 'Validate Terraform'
+        inputs:
+          provider: 'azurerm'
+          command: 'validate'
+          workingDirectory: $(System.DefaultWorkingDirectory)/workload/$(environment)
+          environmentServiceNameAzureRM: $(service_connection)
+      
+      - task: TerraformTaskV4@4
+        name: format
+        displayName: 'Format and Style Terraform'
+        inputs:
+          provider: 'azurerm'
+          command: 'custom'
+          customCommand: 'fmt'
+          outputTo: 'console'
+          workingDirectory: $(System.DefaultWorkingDirectory)/workload/$(environment)
+          environmentServiceNameAzureRM: $(service_connection)
+      
+      - task: TerraformTaskV4@4
+        name: plan
+        displayName: 'Plan Terraform'
+        inputs:
+          provider: 'azurerm'
+          command: 'plan'
+          commandOptions: '-var-file="$(terraformFile.secureFilePath)"'
+          workingDirectory: $(System.DefaultWorkingDirectory)/workload/$(environment)
+          environmentServiceNameAzureRM: $(service_connection)

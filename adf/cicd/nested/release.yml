@@ -1,0 +1,96 @@
+parameters:
+  - name: subscriptionId
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: adfName
+    type: string
+  - name: deployEnvironment
+    type: string
+  - name: serviceConnection
+    type: string
+  - name: overrideParameters
+    type: string
+  - name: poolName
+    type: string
+
+jobs:
+  - deployment: DeploymentADF
+    environment: ${{ parameters.deployEnvironment }}
+    displayName: 'Deploy to ${{ parameters.deployEnvironment }}'
+    timeoutInMinutes: 120
+    pool: ${{ parameters.poolName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: Bash@3
+              inputs:
+                targetType: 'inline'
+                script: |
+                  echo "Pipeline workspace: $(Pipeline.Workspace)"
+                  ls -R $(Pipeline.Workspace)
+              displayName: "List all files in pipeline workspace"
+            
+            # Install PowerShell
+            - task: Bash@3
+              inputs:
+                targetType: 'inline'
+                script: |
+                  sudo apt-get install -y powershell
+                  pwsh -Command "Install-Module -Name Az -Force"
+              displayName: "Install PowerShell"
+            
+            # Retrieve the ARM template from the build phase.
+            - task: DownloadPipelineArtifact@2
+              inputs:
+                buildType: 'current'
+                artifactName: 'ArmTemplates'
+                targetPath: '$(Pipeline.Workspace)'
+              displayName: "Retrieve ARM template"
+            
+            # Deactivate ADF Triggers before deployment.
+            # Sample: https://learn.microsoft.com/en-us/azure/data-factory/continuous-integration-delivery-sample-script
+            - task: AzurePowerShell@5
+              displayName: Stop ADF Triggers
+              inputs:
+                scriptType: 'FilePath'
+                ConnectedServiceNameARM: ${{ parameters.serviceConnection }}
+                scriptPath: $(Pipeline.Workspace)/PrePostDeploymentScript.ps1
+                ScriptArguments: 
+                  -armTemplate "$(Pipeline.Workspace)/ARMTemplateForFactory.json" 
+                  -ResourceGroupName ${{ parameters.resourceGroup }} 
+                  -DataFactoryName ${{ parameters.adfName }} 
+                  -predeployment $true 
+                  -deleteDeployment $false
+                errorActionPreference: stop
+                FailOnStandardError: False
+                azurePowerShellVersion: 'LatestVersion'
+                pwsh: True
+
+            # Deploy using the ARM template. Override ARM template parameters as required.
+            - task: AzureResourceManagerTemplateDeployment@3
+              displayName: 'Deploy using ARM Template'
+              inputs:
+                azureResourceManagerConnection: ${{ parameters.serviceConnection }}
+                subscriptionId: ${{ parameters.subscriptionId }}
+                resourceGroupName: ${{ parameters.resourceGroup }}
+                location: 'Southeast Asia'
+                csmFile: '$(Pipeline.Workspace)/ARMTemplateForFactory.json'
+                csmParametersFile: '$(Pipeline.Workspace)/ARMTemplateParametersForFactory.json'
+                overrideParameters: ${{ parameters.overrideParameters }}
+                deploymentMode: 'Incremental'
+            
+            # Activate ADF Triggers after deployment.
+            # Sample: https://learn.microsoft.com/en-us/azure/data-factory/continuous-integration-delivery-sample-script
+            - task: AzurePowerShell@5
+              displayName: Start ADF Triggers
+              inputs:
+                scriptType: 'FilePath'
+                ConnectedServiceNameARM: ${{ parameters.serviceConnection }}
+                scriptPath: $(Pipeline.Workspace)/PrePostDeploymentScript.ps1
+                ScriptArguments: -ArmTemplate "$(Pipeline.Workspace)/ARMTemplateForFactory.json" -ResourceGroupName ${{ parameters.resourceGroup }} -DataFactoryName ${{ parameters.adfName }} -predeployment $false -deleteDeployment $true
+                errorActionPreference: stop
+                FailOnStandardError: False
+                azurePowerShellVersion: 'LatestVersion'
+                pwsh: True

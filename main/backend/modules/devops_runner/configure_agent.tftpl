@@ -1,0 +1,13 @@
+#!/bin/bash
+curl -o vsts-agent-linux-x64-3.241.0.tar.gz https://vstsagentpackage.azureedge.net/agent/3.241.0/vsts-agent-linux-x64-3.241.0.tar.gz;
+mkdir myagent;
+tar zxvf vsts-agent-linux-x64-3.241.0.tar.gz -C myagent;
+
+chmod -R 777 myagent;
+cd myagent;
+echo $USER;
+AGENT_ALLOW_RUNASROOT=1 ./config.sh --unattended --url ${devops_org_url} --auth pat --token ${devops_pat} --pool ${devops_pool_name} --agent ${devops_agent_name} --acceptTeeEula;
+sudo ./svc.sh install;
+sudo ./svc.sh start;
+
+sudo apt-get install curl && curl -sL https://aka.ms/InstallAzureCLIDeb | bash;

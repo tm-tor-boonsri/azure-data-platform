@@ -1,0 +1,108 @@
+version: '3'
+
+env:
+  ENV: dev 
+
+tasks:
+  default:
+    cmds:
+      - task: test
+
+  test:
+    desc: Run tests.
+    cmds:
+      - echo "Running tests..."
+
+  backend:setup:
+    desc: Backend setup
+    cmds:
+      - echo "Azure login..."
+      - az account set --subscription ${SUBSCRIPTION_ID};
+      - az login --service-principal -u ${SP_APP_ID} -p ${SP_SECRET} --tenant ${TENANT_ID};
+      - echo "Creating resource group..."
+      - az group create --name "${RG_BACKEND_NAME}" --location "${RG_BACKEND_LOC}";
+      - echo "Creating storage account..."
+      - az storage account create --name "${STORAGE_ACCOUNT_NAME}" --resource-group "${RG_BACKEND_NAME}" --location "${RG_BACKEND_LOC}" --sku "Standard_LRS" --encryption-services "blob";
+      - echo "Creating storage containers..."
+      - ACCESS_KEY=$(az storage account keys list --resource-group "${RG_BACKEND_NAME}" --account-name "${STORAGE_ACCOUNT_NAME}" --query "[0].value" --output "tsv");
+      - az storage container create --name "${CONTAINER_BACKEND_NAME}" --account-name "${STORAGE_ACCOUNT_NAME}" --account-key "${ACCESS_KEY}";
+      - az storage container create --name "${CONTAINER_RESOURCE_NAME}" --account-name "${STORAGE_ACCOUNT_NAME}" --account-key "${ACCESS_KEY}";
+      - echo "Get your storage account_key via 'az storage account keys list --resource-group ${RG_BACKEND_NAME} --account-name ${STORAGE_ACCOUNT_NAME} --query '[0].value' --output tsv'"
+      - echo "Store the storage account key in your .envrc file and GHA Env"
+
+  backend:shutdown:
+    desc: Backend setup
+    cmds:
+      - echo "Azure login..."
+      - az login --service-principal -u ${SP_APP_ID} -p ${SP_SECRET} --tenant ${TENANT_ID};
+      - az account set --subscription ${SUBSCRIPTION_ID};
+      - echo "Deleting resource group..."
+      - az group delete --name "${RG_BACKEND_NAME}";
+
+  infra:init-*:
+    desc: Terraform init command
+    vars:
+      ENV: '{{index .MATCH 0}}'
+      ACCESS_KEY: $(az storage account keys list --resource-group "${RG_BACKEND_NAME}" --account-name "${STORAGE_ACCOUNT_NAME}" --query "[0].value" --output "tsv")
+    dir: './{{.ENV}}'
+    cmds:
+      - echo "...🔄 initializing infrastructure {{.ENV}}"
+      - az login --service-principal -u ${SP_APP_ID} -p ${SP_SECRET} --tenant ${TENANT_ID};
+      - terraform init -upgrade 
+        -backend-config="storage_account_name=${STORAGE_ACCOUNT_NAME}" 
+        -backend-config="subscription_id=${SUBSCRIPTION_ID}" 
+        -backend-config="access_key={{.ACCESS_KEY}}"
+      - terraform validate
+  
+  infra:plan-*:
+    desc: Terraform plan command
+    vars:
+      ENV: '{{index .MATCH 0}}'
+    dir: './{{.ENV}}'
+    cmds:
+      - echo "...🪚 drafting infrastructure"
+      - task: 'infra:init-{{.ENV}}'
+      - terraform plan -var-file="terraform.tfvars" -out "terraform.tfplan"
+
+  infra:deploy-*:
+    desc: Terraform apply command
+    vars:
+      ENV: '{{index .MATCH 0}}'
+    dir: './{{.ENV}}'
+    cmds:
+      - echo "...🚀 creating infrastructure"
+      - terraform apply "terraform.tfplan"
+  
+  infra:output-*:
+    desc: Terraform output command
+    vars:
+      ENV: '{{index .MATCH 0}}'
+    dir: './{{.ENV}}'
+    cmds:
+      - echo "...🚀 printing output"
+      - terraform output
+  
+  infra:destroy-*:
+    desc: Terraform destroy command
+    vars:
+      ENV: '{{index .MATCH 0}}'
+    dir: './{{.ENV}}'
+    cmds:
+      - echo "...⛔ destroying infrastructure"
+      - terraform destroy -var-file="terraform.tfvars"
+
+  devops:create-resources-vars:
+    desc: create variables to use in pipeline, you must login with "az devops login --organization ${DEVOPS_ORG_URL}" and prompt to enter a PAT
+    cmds:
+      # - az devops configure --defaults organization=${DEVOPS_ORG_URL} project=${DEVOPS_PROJECT_NAME};
+      - az pipelines variable-group create --name ${DEVOPS_VARIABLE_GROUP}
+        --variables
+        env=${ENV}
+        environment=${ENVIRONMENT}
+        service_connection=${SERVICE_CONNECTION} 
+        backend_resource_group=${RG_BACKEND_NAME}
+        storage_account=${STORAGE_ACCOUNT_NAME}
+        backend_storage_container=${CONTAINER_BACKEND_NAME}
+        resources_storage_container=${CONTAINER_RESOURCE_NAME}
+        databrick_host=""
+        --output table

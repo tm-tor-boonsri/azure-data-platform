@@ -1,0 +1,56 @@
+parameters:
+  - name: subscriptionId
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: adfName
+    type: string
+  - name: adfRootFolder
+    type: string
+  - name: poolName
+    type: string
+
+jobs:
+  - job: BuildADF
+    timeoutInMinutes: 120
+    pool: ${{ parameters.poolName }}
+    steps:
+    
+    # Installs Node and the npm packages saved in your package.json file in the build
+    - task: UseNode@1
+      inputs:
+        version: '18.x'
+      displayName: 'Install node.js'
+    
+    - task: Npm@1
+      inputs:
+        command: 'install'
+        workingDir: '$(Build.Repository.LocalPath)/build'
+        verbose: true
+      displayName: 'Install npm package'
+    
+    # Validates all of the Data Factory resources in the repository. You'll get the same validation errors as when "Validate All" is selected.
+    # Enter the appropriate subscription and name for the source factory. Either of the "Validate" or "Validate and Generate ARM temmplate" options are required to perform validation. Running both is unnecessary.
+    - task: Npm@1
+      inputs:
+        command: 'custom'
+        workingDir: '$(Build.Repository.LocalPath)/build'
+        customCommand: 'run build validate $(Build.Repository.LocalPath)${{ parameters.adfRootFolder }} /subscriptions/${{ parameters.subscriptionId }}/resourceGroups/${{ parameters.resourceGroup }}/providers/Microsoft.DataFactory/factories/${{ parameters.adfName }}'
+      displayName: 'Validate build'
+    
+    # Validate and then generate the ARM template into the destination folder, which is the same as selecting "Publish" from the UX.
+    # The ARM template generated isn't published to the live version of the factory. Deployment should be done by using a CI/CD pipeline. 
+    - task: Npm@1
+      inputs:
+        command: 'custom'
+        workingDir: '$(Build.Repository.LocalPath)/build'
+        customCommand: 'run build export $(Build.Repository.LocalPath)${{ parameters.adfRootFolder }} /subscriptions/${{ parameters.subscriptionId }}/resourceGroups/${{ parameters.resourceGroup }}/providers/Microsoft.DataFactory/factories/${{ parameters.adfName }} "armTemplate"'
+      displayName: 'Validate and generate ARM template'
+
+    # Publish the artifact to be used as a source for deploy pipeline.
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(Build.Repository.LocalPath)/build/armTemplate'
+        artifact: 'ArmTemplates'
+        publishLocation: 'pipeline'
+      displayName: 'Publish ARM template'

@@ -1,0 +1,95 @@
+name: adf build-release pipeline
+
+trigger:
+- release
+- main
+
+parameters:
+- name: "isProd"
+  type: boolean
+  default: false
+- name: "adfRootFolder"
+  type: string
+  default: '/' # depend on setting in adf console
+- name: "environment"
+  type: string
+  default: 'dev'
+  values:
+    - dev
+    - test
+    - prod
+
+variables:
+- name: poolName
+  ${{ if and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, true)) }}: # PROD
+    value: none
+  ${{ if or(eq(variables['Build.SourceBranchName'], 'main'), eq(parameters.environment, 'test'))  }}: # TEST
+    value: test-pool
+  ${{ if eq(parameters.environment, 'dev') }}: # DEV
+    value: dev-pool
+
+stages:
+  - stage: Build
+    displayName: Validate and generate ARM templates
+    variables:
+      - template: ./vars/${{ parameters.environment }}.yml
+
+    jobs:
+      - template: ./nested/build.yml
+        parameters:
+          adfRootFolder: ${{ parameters.adfRootFolder }}
+          subscriptionId: ${{ variables.subscriptionId }}
+          resourceGroup: ${{ variables.resourceGroup }}
+          adfName: ${{ variables.adfName }}
+          poolName: ${{ variables.poolName }}
+
+  - stage: DeployDEV
+    dependsOn: build
+    condition: and(succeeded(), eq(variables['env'], 'dv')) 
+    displayName: 'Deploy ADF-DEV'
+    variables:
+      - template: ./vars/dev.yml 
+    jobs:
+      - template: ./nested/release.yml
+        parameters:
+          subscriptionId: ${{ variables.subscriptionId }}
+          resourceGroup: ${{ variables.resourceGroup }}
+          adfName: ${{ variables.adfName }}
+          deployEnvironment: 'dev'
+          serviceConnection: ${{ variables.serviceConnection }}
+          overrideParameters: ${{ variables.overrideParameters }}
+          poolName: ${{ variables.poolName }}
+      
+  - stage: DeployTEST
+    dependsOn: build
+    condition: and(succeeded(), eq(variables['env'], 'te')) 
+    displayName: 'Deploy ADF-TEST'
+    variables:
+      - template: ./vars/test.yml 
+    jobs:
+      - template: ./nested/release.yml
+        parameters:
+          subscriptionId: ${{ variables.subscriptionId }}
+          resourceGroup: ${{ variables.resourceGroup }}
+          adfName: ${{ variables.adfName }}
+          deployEnvironment: 'test'
+          serviceConnection: ${{ variables.serviceConnection }}
+          overrideParameters: ${{ variables.overrideParameters }}
+          poolName: ${{ variables.poolName }}
+  
+  - stage: DeployPROD
+    dependsOn: build
+    condition: and(succeeded(), eq(variables['env'], 'pd')) 
+    displayName: 'Deploy ADF-PROD'
+    variables:
+      - template: vars/prod.yml 
+    jobs:
+      - template: nested/release.yml
+        parameters:
+          subscriptionId: ${{ variables.subscriptionId }}
+          resourceGroup: ${{ variables.resourceGroup }}
+          adfName: ${{ variables.adfName }}
+          deployEnvironment: 'prod'
+          serviceConnection: ${{ variables.serviceConnection }}
+          overrideParameters: ${{ variables.overrideParameters }}
+          poolName: ${{ variables.poolName }}

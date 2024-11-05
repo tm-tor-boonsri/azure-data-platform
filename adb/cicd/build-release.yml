@@ -1,0 +1,126 @@
+name: adb build-release pipeline
+
+trigger:
+  branches:
+    include:
+    - release
+    - main
+
+parameters:
+- name: isProd
+  type: boolean
+  default: false
+- name: branchName
+  type: string
+  default: main
+- name: sharePathName
+  type: string
+  default: "" # team working path
+- name: environment
+  type: string
+  default: dev
+  values:
+    - dev
+    - test
+    - prod
+  
+variables:
+- ${{ if and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, true)) }}:
+  - group: "" # prod variable group
+- ${{ if or(and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, false)), eq(parameters.environment, 'test')) }}:
+  - group: "" # test variable group
+- ${{ if or(eq(variables['Build.SourceBranchName'], 'main'), eq(parameters.environment, 'dev')) }}:
+  - group: "" # dev variable group
+
+stages:
+- stage: Installation
+  pool: (env)-devops-vm-pool
+  displayName: 'Install Prerequisites'
+  jobs:
+  - job: install
+    steps:
+      - task: Bash@3
+        displayName: 'Install AzureCLI'
+        inputs:
+          targetType: 'inline'
+          script: |
+            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+            
+      - task: AzureCLI@2
+        displayName: 'Install zip'
+        inputs:
+          azureSubscription: $(service_connection)
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            sudo apt-get update
+            sudo apt-get install zip unzip -y
+
+      - task: Bash@3
+        displayName: 'Install Databricks CLI'
+        inputs:
+          targetType: 'inline'
+          script: |
+            # Check if Databricks CLI is installed
+            if ! command -v databricks &> /dev/null
+            then
+                echo "Databricks CLI not found, installing..."
+                curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/v0.232.1/install.sh | sudo sh
+            else
+                echo "Databricks CLI already installed, skipping installation."
+            fi
+
+- stage: Configuration
+  pool: (env)-devops-vm-pool
+  displayName: 'Configure Databricks'
+  jobs:
+  - job: configure
+    steps:
+      - task: AzureCLI@2
+        inputs:
+          azureSubscription: $(service_connection)
+          scriptType: 'bash'
+          useGlobalConfig: true
+          scriptLocation: 'inlineScript'
+          inlineScript: | #  the unique resource ID for the Azure Databricks service is 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d
+            echo "Getting access token..."
+            DATABRICKS_TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query "accessToken" -o tsv)
+            echo "##vso[task.setvariable variable=DATABRICKS_TOKEN;isOutput=true]$DATABRICKS_TOKEN"
+          name: SetDatabricksToken
+
+      - checkout: self
+        displayName: 'Checkout & Build.Reason: $(Build.Reason) & Build.SourceBranchName: $(Build.SourceBranchName)'
+
+- stage: DeployDEV
+  dependsOn: Configuration
+  condition: and(succeeded(), eq(variables['env'], 'dv')) 
+  displayName: 'Deploy ADB DEV'
+  variables:
+      databrick_token: $[ stageDependencies.Configuration.configure.outputs['SetDatabricksToken.DATABRICKS_TOKEN'] ]
+  jobs:
+    - template: ./nested/release.yml
+      parameters: 
+        serviceConnection: $(service_connection)
+        poolName: $(pool_name)
+        deployEnvironment: 'dev'
+        branchName:  ${{ parameters.branchName }}
+        sharePath: ${{ parameters.sharePathName }}
+        databricks_host: $(databrick_host)
+        databricks_token: $(databrick_token)
+
+- stage: DeployTEST
+  dependsOn: Configuration
+  condition: and(succeeded(), eq(variables['env'], 'te')) 
+  displayName: 'Deploy ADB TEST'
+  variables:
+      databrick_token: $[ stageDependencies.Configuration.configure.outputs['SetDatabricksToken.DATABRICKS_TOKEN'] ]
+  jobs:
+    - template: ./nested/release.yml
+      parameters: 
+        serviceConnection: $(service_connection)
+        poolName: $(pool_name)
+        deployEnvironment: 'test'
+        branchName:  ${{ parameters.branchName }}
+        sharePath: ${{ parameters.sharePathName }}
+        databricks_host: $(databrick_host)
+        databricks_token: $(databrick_token)

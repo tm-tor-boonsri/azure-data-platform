@@ -1,0 +1,206 @@
+name: build-release pipeline
+
+trigger:
+- release
+- main
+
+parameters:
+- name: "isProd"
+  type: boolean
+  default: false
+
+variables:
+- ${{ if and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, true)) }}: #PROD
+  - group: "" # prod variable group
+- ${{ if and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, false)) }}: #TEST
+  - group: "" # test variable group
+- ${{ if eq(variables['Build.SourceBranchName'], 'main') }}: #DEV
+  - group: "" # dev variable group
+
+stages:
+- stage: Installation
+  pool: (env)-devops-vm-pool # pool of env.
+  displayName: 'Install Prerequisites'
+  jobs:
+  - job: install
+    steps:
+      - task: Bash@3
+        displayName: 'Install AzureCLI'
+        inputs:
+          targetType: 'inline'
+          script: |
+            curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+            
+      - task: AzureCLI@2
+        displayName: 'Install zip'
+        inputs:
+          azureSubscription: $(service_connection)
+          scriptType: 'bash'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            sudo apt-get install zip -y
+
+- stage: Validation
+  pool: (env)-devops-vm-pool
+  displayName: Build and Validate
+  jobs:
+  - job: execute
+    steps:
+      - task: TerraformInstaller@1
+        name: setup
+        displayName: 'Setup Terraform'
+        inputs:
+          terraformVersion: 'latest'
+          checkLatestVersion: false
+
+      - task: DownloadSecureFile@1
+        name: terraformFile
+        displayName: 'Download terraform.tfvars'
+        inputs:
+          secureFile: '$(environment).terraform.tfvars'
+      
+      - task: TerraformTaskV4@4
+        displayName: 'Initialize Terraform'
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          commandOptions: '-upgrade'
+          workingDirectory: $(System.DefaultWorkingDirectory)/workload/$(environment)
+          backendServiceArm: $(service_connection)
+          backendAzureRmResourceGroupName: $(backend_resource_group)
+          backendAzureRmStorageAccountName: $(storage_account)
+          backendAzureRmContainerName: $(workload_storage_container)
+          backendAzureRmKey: '$(environment).terraform.tfstate'
+      
+      - task: TerraformTaskV4@4
+        name: terraformValidate
+        displayName: 'Validate Terraform'
+        inputs:
+          provider: 'azurerm'
+          command: 'validate'
+          workingDirectory: $(System.DefaultWorkingDirectory)/workload/$(environment)
+          environmentServiceNameAzureRM: $(service_connection)
+
+      - task: TerraformTaskV4@4
+        name: terraformPlan
+        displayName: 'Plan Terraform'
+        inputs:
+          provider: 'azurerm'
+          command: 'plan'
+          commandOptions: '-var-file="$(terraformFile.secureFilePath)" -out=terraform.tfplan'
+          workingDirectory: $(System.DefaultWorkingDirectory)/workload/$(environment)
+          environmentServiceNameAzureRM: $(service_connection)
+
+      - task: CopyFiles@2
+        name: copyTerraformPlanFile
+        displayName: Copy terraform.tfplan
+        inputs:
+          sourceFolder: '$(System.DefaultWorkingDirectory)/workload/$(environment)'
+          Contents: 'terraform.tfplan'
+          TargetFolder: '$(Build.ArtifactStagingDirectory)'
+            
+      - task: PublishBuildArtifacts@1
+        name: publishTerraformPlan
+        displayName: Publish Terraform plan
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+          ArtifactName: 'output.terraform.$(environment)'
+          publishLocation: 'Container'
+
+- stage: DeployDEV
+  pool: dev-pool
+  dependsOn: Validation
+  condition: and(succeeded(), eq(variables['env'], 'dv')) 
+  displayName: 'Deploy Terraform DEV'
+  jobs:
+  - deployment: DeployTerraform
+    displayName: deploy
+    environment: dev
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: DownloadPipelineArtifact@2
+              inputs:
+                buildType: 'current'
+                targetPath: '$(Pipeline.Workspace)'
+                artifactName: 'output.terraform.dev'
+
+            - task: TerraformInstaller@1 
+              name: setup
+              displayName: 'Setup Terraform'
+              inputs:
+                terraformVersion: 'latest'
+
+            - task: TerraformTaskV4@4
+              name: init
+              displayName: 'Initialize Terraform'
+              inputs:
+                provider: 'azurerm'
+                command: 'init'
+                commandOptions: '-upgrade'
+                workingDirectory: '$(Build.SourcesDirectory)/workload/dev'
+                backendServiceArm: '$(service_connection)'
+                backendAzureRmResourceGroupName: '$(backend_resource_group)'
+                backendAzureRmStorageAccountName: '$(storage_account)'
+                backendAzureRmContainerName: '$(workload_storage_container)'
+                backendAzureRmKey: 'dev.terraform.tfstate'
+
+            - task: TerraformTaskV4@4
+              name: apply
+              displayName: 'Apply Terraform'
+              inputs:
+                provider: 'azurerm'
+                command: 'apply'
+                commandOptions: '$(Pipeline.Workspace)/output.terraform.dev/terraform.tfplan'
+                workingDirectory: '$(Build.SourcesDirectory)/workload/dev'
+                environmentServiceNameAzureRM: $(service_connection)
+
+- stage: DeployTEST
+  pool: test-pool
+  dependsOn: Validation
+  condition: and(succeeded(), eq(variables['env'], 'te')) 
+  displayName: 'Deploy Terraform TEST'
+  jobs:
+  - deployment: DeployTerraform
+    displayName: deploy
+    environment: test
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - task: DownloadPipelineArtifact@2
+              inputs:
+                buildType: 'current'
+                targetPath: '$(Pipeline.Workspace)'
+                artifactName: 'output.terraform.test'
+
+            - task: TerraformInstaller@1 
+              name: setup
+              displayName: 'Setup Terraform'
+              inputs:
+                terraformVersion: 'latest'
+
+            - task: TerraformTaskV4@4
+              name: init
+              displayName: 'Initialize Terraform'
+              inputs:
+                provider: 'azurerm'
+                command: 'init'
+                commandOptions: '-upgrade'
+                workingDirectory: '$(Build.SourcesDirectory)/workload/test'
+                backendServiceArm: '$(service_connection)'
+                backendAzureRmResourceGroupName: '$(backend_resource_group)'
+                backendAzureRmStorageAccountName: '$(storage_account)'
+                backendAzureRmContainerName: '$(workload_storage_container)'
+                backendAzureRmKey: 'test).terraform.tfstate'
+
+            - task: TerraformTaskV4@4
+              name: apply
+              displayName: 'Apply Terraform'
+              inputs:
+                provider: 'azurerm'
+                command: 'apply'
+                commandOptions: '$(Pipeline.Workspace)/output.terraform.test/terraform.tfplan'
+                workingDirectory: '$(Build.SourcesDirectory)/workload/test'
+                environmentServiceNameAzureRM: $(service_connection)
