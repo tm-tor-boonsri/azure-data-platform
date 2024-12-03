@@ -7,30 +7,23 @@ trigger:
     - main
 
 parameters:
-- name: isProd
+- name: isProd # manual deploy
   type: boolean
   default: false
 - name: branchName
   type: string
   default: main
-- name: sharePathName
+- name: sharedPathName
   type: string
-  default: "" # team working path
-- name: environment
-  type: string
-  default: dev
-  values:
-    - dev
-    - test
-    - prod
+  default: /Shared/{repo-name}
   
 variables:
-- ${{ if and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, true)) }}:
-  - group: "" # prod variable group
-- ${{ if or(and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, false)), eq(parameters.environment, 'test')) }}:
-  - group: "" # test variable group
-- ${{ if or(eq(variables['Build.SourceBranchName'], 'main'), eq(parameters.environment, 'dev')) }}:
-  - group: "" # dev variable group
+- ${{ if and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, true)) }}: # PROD
+  - group: ""
+- ${{ elseif and(eq(variables['Build.SourceBranchName'], 'release'), eq(parameters.isProd, false)) }}: # TEST
+  - group: ""
+- ${{ else }}: # DEV
+  - group: ""
 
 stages:
 - stage: Installation

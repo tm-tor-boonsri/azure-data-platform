@@ -101,8 +101,12 @@ tasks:
         environment=${ENVIRONMENT}
         service_connection=${SERVICE_CONNECTION} 
         backend_resource_group=${RG_BACKEND_NAME}
+        resources_resource_group=${RG_RESOURCES_NAME}
         storage_account=${STORAGE_ACCOUNT_NAME}
         backend_storage_container=${CONTAINER_BACKEND_NAME}
         resources_storage_container=${CONTAINER_RESOURCE_NAME}
+        subscription_id=${SUBSCRIPTION_ID}
+        pool_name=${DEVOPS_POOL_NAME}
+        adf_name=${ADF_NAME}
         databrick_host=""
         --output table
